@@ -1,15 +1,25 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import mammoth from 'mammoth';
-import XLSX from 'xlsx';
-import pdfParse from 'pdf-parse';
-import { createClient } from '@supabase/supabase-js';
-import crypto from 'crypto';
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const mammoth = require('mammoth');
+const XLSX = require('xlsx');
+const pdfParse = require('pdf-parse');
+const { createClient } = require('@supabase/supabase-js');
+const crypto = require('crypto');
 
-// Initialize Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
+// Lazy-loaded Supabase client
+let supabase = null;
+
+function getSupabaseClient() {
+  if (!supabase) {
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+      throw new Error('Supabase environment variables are not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY in your .env file.');
+    }
+    supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_ANON_KEY
+    );
+  }
+  return supabase;
+}
 
 class KnowledgeIngestionService {
   static DEFAULT_CHUNKING_OPTIONS = {
@@ -194,7 +204,7 @@ class KnowledgeIngestionService {
     }
 
     // Check by file hash first (most reliable)
-    const { data: hashData, error: hashError } = await supabase
+    const { data: hashData, error: hashError } = await getSupabaseClient()
       .from('knowledge_chunks')
       .select('id, file_name, created_at')
       .eq('agent_id', agentId)
@@ -213,7 +223,7 @@ class KnowledgeIngestionService {
 
     // Also check by file name if provided
     if (fileName) {
-      const { data: nameData, error: nameError } = await supabase
+      const { data: nameData, error: nameError } = await getSupabaseClient()
         .from('knowledge_chunks')
         .select('id, file_name, created_at')
         .eq('agent_id', agentId)
@@ -582,7 +592,7 @@ class KnowledgeIngestionService {
       return [];
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('knowledge_chunks')
       .insert(chunks)
       .select();
@@ -598,7 +608,7 @@ class KnowledgeIngestionService {
    * Get processing statistics for an agent
    */
   static async getProcessingStats(agentId) {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('knowledge_chunks')
       .select('file_name, file_size, created_at')
       .eq('agent_id', agentId);
@@ -626,7 +636,7 @@ class KnowledgeIngestionService {
    * Delete all chunks for a specific file
    */
   static async deleteFileChunks(agentId, fileHash) {
-    const { error } = await supabase
+    const { error } = await getSupabaseClient()
       .from('knowledge_chunks')
       .delete()
       .eq('agent_id', agentId)
@@ -636,68 +646,6 @@ class KnowledgeIngestionService {
       throw new Error(`Failed to delete file chunks: ${error.message}`);
     }
   }
-
-  /**
-   * Get relevant knowledge chunks for a query using similarity search
-   */
-  static async getRelevantKnowledge(agentId, query, limit = 5, similarityThreshold = 0.7) {
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        throw new Error('Gemini API key not configured');
-      }
-
-      const { GoogleGenerativeAI } = require('@google/generative-ai');
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: 'text-embedding-004' });
-
-      // Generate embedding for the query
-      const queryResult = await model.embedContent(query);
-      const queryEmbedding = queryResult.embedding.values;
-
-      // Perform similarity search in Supabase
-      const { data, error } = await supabase.rpc('match_knowledge_chunks', {
-        query_embedding: queryEmbedding,
-        match_agent_id: agentId,
-        match_threshold: similarityThreshold,
-        match_count: limit
-      });
-
-      if (error) {
-        console.error('Error in similarity search:', error);
-        // Fallback to simple text search if vector search fails
-        return await this.fallbackTextSearch(agentId, query, limit);
-      }
-
-      return data || [];
-    } catch (error) {
-      console.error('Error retrieving relevant knowledge:', error);
-      // Fallback to simple text search
-      return await this.fallbackTextSearch(agentId, query, limit);
-    }
-  }
-
-  /**
-   * Fallback text search when vector search is not available
-   */
-  static async fallbackTextSearch(agentId, query, limit = 5) {
-    try {
-      const { data, error } = await supabase
-        .from('knowledge_chunks')
-        .select('*')
-        .eq('agent_id', agentId)
-        .limit(limit);
-
-      if (error) {
-        throw new Error(`Failed to perform fallback search: ${error.message}`);
-      }
-
-      return data || [];
-    } catch (error) {
-      console.error('Error in fallback search:', error);
-      return [];
-    }
-  }
 }
 
-export { KnowledgeIngestionService };
+module.exports = KnowledgeIngestionService;
