@@ -1,31 +1,17 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "api/**/*.js",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/api/$1"
-    },
-    {
-      "src": "/health",
-      "dest": "/api/health"
-    },
-    {
-      "src": "/",
-      "dest": "/api/index"
-    }
-  ],
   "functions": {
     "api/ingest-document.js": {
       "maxDuration": 60
     },
     "api/generate-response.js": {
       "maxDuration": 30
+    },
+    "api/processing-stats/[agentId].js": {
+      "maxDuration": 10
+    },
+    "api/delete-file/[agentId]/[fileHash].js": {
+      "maxDuration": 10
     }
   }
 }
