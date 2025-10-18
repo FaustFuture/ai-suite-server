@@ -4,6 +4,7 @@ const cors = require('cors');
 require('dotenv').config();
 
 const KnowledgeIngestionService = require('./services/KnowledgeIngestionService');
+const CoachAIKnowledgeIngestionService = require('./services/CoachAIKnowledgeIngestionService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,7 +17,7 @@ app.use(express.json());
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB limit
+    fileSize: 50 * 1024 * 1024 // 50MB limit (increased for Coach AI)
   }
 });
 
@@ -38,7 +39,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Document ingestion endpoint
+// Document ingestion endpoint (supports both regular agents and Coach AI)
 app.post('/api/ingest-document', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
@@ -48,30 +49,61 @@ app.post('/api/ingest-document', upload.single('file'), async (req, res) => {
       });
     }
 
-    const { agentId } = req.body;
-    if (!agentId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Agent ID is required'
-      });
-    }
+    const { agentId, companyId, knowledgeType } = req.body;
+    
+    // Determine if this is for Coach AI or regular agent
+    const isCoachAI = knowledgeType === 'coach-ai' || companyId;
+    
+    if (isCoachAI) {
+      // Coach AI knowledge processing
+      if (!companyId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Company ID is required for Coach AI knowledge processing'
+        });
+      }
 
-    console.log(`Processing file: ${req.file.originalname} (${req.file.size} bytes)`);
-    console.log(`File type: ${req.file.mimetype}`);
-    console.log(`Agent ID: ${agentId}`);
+      console.log(`🤖 Coach AI Knowledge Processing - File: ${req.file.originalname} (${req.file.size} bytes)`);
+      console.log(`📊 File type: ${req.file.mimetype}, Company: ${companyId}`);
 
-    const result = await KnowledgeIngestionService.ingestDocument(
-      req.file.buffer,
-      req.file.originalname,
-      req.file.mimetype,
-      req.file.size,
-      agentId
-    );
+      const result = await CoachAIKnowledgeIngestionService.ingestDocument(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype,
+        req.file.size,
+        companyId
+      );
 
-    if (result.success) {
-      res.json(result);
+      if (result.success) {
+        res.json(result);
+      } else {
+        res.status(400).json(result);
+      }
     } else {
-      res.status(400).json(result);
+      // Regular agent knowledge processing
+      if (!agentId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Agent ID is required for regular agent knowledge processing'
+        });
+      }
+
+      console.log(`📚 Regular Agent Knowledge Processing - File: ${req.file.originalname} (${req.file.size} bytes)`);
+      console.log(`📊 File type: ${req.file.mimetype}, Agent ID: ${agentId}`);
+
+      const result = await KnowledgeIngestionService.ingestDocument(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype,
+        req.file.size,
+        agentId
+      );
+
+      if (result.success) {
+        res.json(result);
+      } else {
+        res.status(400).json(result);
+      }
     }
 
   } catch (error) {
@@ -83,15 +115,27 @@ app.post('/api/ingest-document', upload.single('file'), async (req, res) => {
   }
 });
 
-// Get processing stats endpoint
-app.get('/api/processing-stats/:agentId', async (req, res) => {
+// Get processing stats endpoint (supports both regular agents and Coach AI)
+app.get('/api/processing-stats/:id', async (req, res) => {
   try {
-    const { agentId } = req.params;
-    const stats = await KnowledgeIngestionService.getProcessingStats(agentId);
-    res.json({
-      success: true,
-      stats
-    });
+    const { id } = req.params;
+    const { type } = req.query; // 'agent' or 'coach-ai'
+    
+    if (type === 'coach-ai') {
+      // Coach AI processing stats
+      const stats = await CoachAIKnowledgeIngestionService.getProcessingStats(id);
+      res.json({
+        success: true,
+        stats
+      });
+    } else {
+      // Regular agent processing stats
+      const stats = await KnowledgeIngestionService.getProcessingStats(id);
+      res.json({
+        success: true,
+        stats
+      });
+    }
   } catch (error) {
     console.error('Error getting processing stats:', error);
     res.status(500).json({
@@ -101,17 +145,64 @@ app.get('/api/processing-stats/:agentId', async (req, res) => {
   }
 });
 
-// Delete file chunks endpoint
-app.delete('/api/delete-file/:agentId/:fileHash', async (req, res) => {
+// Delete file chunks endpoint (supports both regular agents and Coach AI)
+app.delete('/api/delete-file/:id/:fileHash', async (req, res) => {
   try {
-    const { agentId, fileHash } = req.params;
-    await KnowledgeIngestionService.deleteFileChunks(agentId, fileHash);
-    res.json({
-      success: true,
-      message: 'File chunks deleted successfully'
-    });
+    const { id, fileHash } = req.params;
+    const { type } = req.query; // 'agent' or 'coach-ai'
+    
+    if (type === 'coach-ai') {
+      // Coach AI file deletion
+      await CoachAIKnowledgeIngestionService.deleteFileChunks(id, fileHash);
+      res.json({
+        success: true,
+        message: 'Coach AI file chunks deleted successfully'
+      });
+    } else {
+      // Regular agent file deletion
+      await KnowledgeIngestionService.deleteFileChunks(id, fileHash);
+      res.json({
+        success: true,
+        message: 'File chunks deleted successfully'
+      });
+    }
   } catch (error) {
     console.error('Error deleting file chunks:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Internal server error'
+    });
+  }
+});
+
+// Coach AI specific endpoints
+app.get('/api/coach-ai/processing-stats/:companyId', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const stats = await CoachAIKnowledgeIngestionService.getProcessingStats(companyId);
+    res.json({
+      success: true,
+      stats
+    });
+  } catch (error) {
+    console.error('Error getting Coach AI processing stats:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Internal server error'
+    });
+  }
+});
+
+app.delete('/api/coach-ai/delete-file/:companyId/:fileHash', async (req, res) => {
+  try {
+    const { companyId, fileHash } = req.params;
+    await CoachAIKnowledgeIngestionService.deleteFileChunks(companyId, fileHash);
+    res.json({
+      success: true,
+      message: 'Coach AI file chunks deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting Coach AI file chunks:', error);
     res.status(500).json({
       success: false,
       message: error.message || 'Internal server error'
